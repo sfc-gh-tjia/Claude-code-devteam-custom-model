@@ -1,0 +1,17 @@
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:4000",
+    "ANTHROPIC_AUTH_TOKEN": "sk-devteam-local",
+    "ANTHROPIC_CUSTOM_HEADERS": "x-devteam-profile: interactive",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "role-lead",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME": "Everyday (profile role lead)",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "role-lead-plan",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME": "Hard problems (profile role lead-plan)",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "role-background",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME": "Helpers and background (profile role background)",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "role-default",
+    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "200000",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
+  },
+  "model": "sonnet"
+}

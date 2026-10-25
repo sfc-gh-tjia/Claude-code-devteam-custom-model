@@ -27,7 +27,7 @@ import pytest
 
 GW = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(GW))
-from hooks import IMAGE_NOTE, ROUTES, ProfileError, load_profile, normalize_request, resolve  # noqa: E402
+from hooks import IMAGE_NOTE, PROFILE_HEADER, ROUTES, ProfileError, load_profile, normalize_request, profile_for, resolve  # noqa: E402
 from render import render  # noqa: E402
 from tiers import TierError, load_tiers, profiles_dir  # noqa: E402
 from probe import QUIZ, compare_identity  # noqa: E402
@@ -193,6 +193,16 @@ def test_shipped_tiers_and_profiles_are_consistent():
         assert set(load_profile(f.stem).values()) <= set(tiers), f.stem
 
 
+def test_profile_header_is_case_insensitive_defaults_and_fails_closed():
+    allowed = ["baseline", "interactive"]
+    assert profile_for({}, "baseline", allowed) == "baseline"
+    assert profile_for({"X-DevTeam-Profile": "interactive"}, "baseline", allowed) == "interactive"
+    assert profile_for({PROFILE_HEADER: "  "}, "baseline", allowed) == "baseline"
+    with pytest.raises(ProfileError, match="not allowed"):
+        profile_for({PROFILE_HEADER: "flash-first"}, "baseline", allowed)
+    assert load_profile("interactive")["background"] == "nv-smart" and load_profile("baseline")["background"] == "nv-fast"
+
+
 # ------------------------------------------------------------------ 2. LiteLLM proxy + mock upstream
 def free_port() -> int:
     s = socket.socket()
@@ -227,6 +237,7 @@ class Upstream:
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers.get("content-length", 0))) or b"{}")
                 body["_path"], body["_auth"] = self.path, self.headers.get("authorization", "")
+                body["_headers"] = {k.lower(): v for k, v in self.headers.items()}
                 up.calls.append(body)
                 msgs = body.get("messages", [])
                 text = json.dumps(msgs)
@@ -283,7 +294,8 @@ def start_gateway(up, extra=None):
     port = free_port()
     env = {**os.environ, "DEEPSEEK_API_KEY": "ds-test", "NVIDIA_API_KEY": "nv-test",
            "DEEPSEEK_API_BASE": up.url, "NVIDIA_API_BASE": up.url + "/v1",
-           "PROFILE": "baseline", "GATEWAY_KEY": KEY, "LITELLM_LOG": "ERROR", **(extra or {})}
+           "PROFILE": "baseline", "GATEWAY_KEY": KEY, "LITELLM_LOG": "ERROR",
+           "GATEWAY_ROUTE_LOG": tempfile.mktemp(suffix=".jsonl"), **(extra or {})}
     cfg = GW / f".litellm.test-{port}.yaml"   # must sit in gateway/: LiteLLM imports hooks.py next to it
     r = subprocess.run([sys.executable, str(GW / "render.py"), "--out", str(cfg)], env=env, capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
@@ -303,7 +315,16 @@ def start_gateway(up, extra=None):
         p.kill()
         cfg.unlink(missing_ok=True)
         pytest.fail("gateway did not start:\n" + Path(log.name).read_text()[-3000:])
+    ROUTE_LOGS[base] = Path(env["GATEWAY_ROUTE_LOG"])
     return base, p, log.name, cfg
+
+
+ROUTE_LOGS: dict = {}
+
+
+def routes(base) -> list:
+    f = ROUTE_LOGS[base]
+    return [json.loads(line) for line in f.read_text().splitlines()] if f.exists() else []
 
 
 def _up(base):
@@ -330,11 +351,12 @@ def gateway():
     stop_gateway(p, cfg)
 
 
-def post(base, body, stream=False):
+def post(base, body, stream=False, headers=None):
     body = {**body, "stream": stream}
     r = urllib.request.Request(base + "/v1/messages", data=json.dumps(body).encode(), method="POST",
                                headers={"content-type": "application/json", "x-api-key": KEY,
-                                        "authorization": f"Bearer {KEY}", "anthropic-version": "2023-06-01"})
+                                        "authorization": f"Bearer {KEY}", "anthropic-version": "2023-06-01",
+                                        **(headers or {})})
     try:
         with urllib.request.urlopen(r, timeout=60) as resp:
             raw = resp.read().decode()
@@ -429,6 +451,57 @@ def test_probe_identity_runs_against_the_mock(gateway, tmp_path):
     assert rep["pro"]["answered"] == len(QUIZ) and rep["pro"]["models"] == ["deepseek-v4-pro"]
     sent = [c for c in up.calls if c["_path"].endswith("/chat/completions") and c["model"] in ("deepseek-v4-pro", "deepseek-flash")]
     assert all(c.get("thinking") == {"type": "enabled"} for c in sent[-2 * len(QUIZ):])
+
+
+def test_one_gateway_serves_different_profiles_per_request(gateway):
+    base, up, _ = gateway
+    hp = lambda name: {PROFILE_HEADER: name}  # noqa: E731
+    post(base, req("role-reviewer", "high"))
+    assert last(up)[0]["model"] == "deepseek-v4-pro"                       # gateway default: baseline
+    post(base, req("role-reviewer", "high"), headers=hp("flash-first"))
+    assert last(up)[0]["model"] == "deepseek-flash"                        # same gateway, other profile
+    post(base, req("role-implementer", "high"), headers=hp("thrift"))
+    assert last(up)[0]["model"] == "deepseek-ai/deepseek-v4.1-flash"
+    post(base, req("role-background", "low"), headers=hp("interactive"))
+    assert last(up)[0]["model"] == "moonshotai/kimi-k2.6"
+    post(base, req("role-background", "low"))
+    assert last(up)[0]["model"] == "nvidia/nemotron-3.5-lightning-30b-a3b"   # no header: unchanged
+    assert not [c for c in up.calls if PROFILE_HEADER in c.get("_headers", {})], "routing header leaked upstream"
+
+
+def test_unknown_profile_header_fails_closed(gateway):
+    base, up, _ = gateway
+    n = len(up.calls)
+    with pytest.raises(AssertionError) as e:
+        post(base, req("role-lead"), headers={PROFILE_HEADER: "no-such-profile"})
+    assert "not allowed" in str(e.value) and len(up.calls) == n
+
+
+def test_route_log_records_profile_tier_and_served_model(gateway):
+    base, up, _ = gateway
+    post(base, req("role-triage", "low", messages=[{"role": "user", "content": "FORCE429"}]),
+         headers={PROFILE_HEADER: "interactive"})
+    time.sleep(1.0)   # success callbacks are async
+    recs = routes(base)
+    r = [x for x in recs if x.get("event") == "route" and x.get("profile") == "interactive" and x.get("requested") == "role-triage"]
+    assert r and r[-1]["tier"] == "nv-smart", recs[-5:]
+    s = [x for x in recs if x.get("event") == "served" and x.get("requested") == "role-triage"]
+    assert s, recs[-5:]
+    assert s[-1]["profile"] == "interactive" and "glm-5.3" in str(s[-1]["served_model"]), s[-1]
+    assert s[-1]["fallback"] is True and s[-1]["served_tier"] == "nv-smart-alt", s[-1]
+
+
+def test_allowed_profiles_limit_what_a_client_may_select(tmp_path):
+    if not shutil.which("litellm"):
+        pytest.skip("litellm not installed")
+    up = Upstream()
+    base, p, log, cfg = start_gateway(up, {"ALLOWED_PROFILES": "baseline,interactive"})
+    try:
+        post(base, req("role-lead"), headers={PROFILE_HEADER: "interactive"})
+        with pytest.raises(AssertionError, match="not allowed"):
+            post(base, req("role-lead"), headers={PROFILE_HEADER: "flash-first"})
+    finally:
+        stop_gateway(p, cfg)
 
 
 def test_plug_in_any_openai_compatible_model(tmp_path):

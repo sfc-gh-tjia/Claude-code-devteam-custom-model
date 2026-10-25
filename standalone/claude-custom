@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# claude-custom: Claude Code on your own models, through the shared DevTeam gateway.
+# Plain `claude` is untouched; nothing in ~/.claude is changed.
+#
+#   claude-custom [launcher options] [any claude arguments...]
+#     --profile NAME   gateway profile for this session (default: $CLAUDE_CUSTOM_PROFILE or interactive)
+#     --start          start the gateway if it is not running
+#     --dry-run        print the banner and the settings it would use, then exit
+#     --selfcheck      prove Claude Code works with no Anthropic login: one tiny request with a fresh,
+#                      empty Claude config dir, through the gateway (costs a fraction of a cent)
+#
+# It writes the session's settings to <template>/.loop/standalone-settings.json and runs
+# `claude --settings <that file>`. Settings passed with --settings outrank user and project settings
+# for env, so the gateway connection wins even inside a repo with its own .claude/settings.json.
+# (Hooks from all settings files still apply: in a DevTeam project its guard keeps running.)
+set -euo pipefail
+SELF="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$0")"
+DEVTEAM_HOME="${DEVTEAM_HOME:-$(cd "$(dirname "$SELF")/.." && pwd)}"
+GW="$DEVTEAM_HOME/gateway"
+PROFILE_NAME="${CLAUDE_CUSTOM_PROFILE:-interactive}"
+START=0; DRY=0; SELFCHECK=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --profile) PROFILE_NAME="${2:?--profile needs a name}"; shift 2 ;;
+    --profile=*) PROFILE_NAME="${1#*=}"; shift ;;
+    --start) START=1; shift ;;
+    --dry-run) DRY=1; shift ;;
+    --selfcheck) SELFCHECK=1; shift ;;
+    *) break ;;
+  esac
+done
+[ -d "$GW" ] || { echo "claude-custom: no gateway at $GW (set DEVTEAM_HOME to your template clone)" >&2; exit 1; }
+envval() { { grep -s "^$1=" "$GW/.env" || true; } | tail -1 | cut -d= -f2- | sed 's/[[:space:]]*#.*$//; s/[[:space:]]*$//'; }
+PORT="${GATEWAY_PORT:-$(envval GATEWAY_PORT)}"; PORT="${PORT:-4000}"
+KEY="${GATEWAY_KEY:-$(envval GATEWAY_KEY)}"; KEY="${KEY:-sk-devteam-local}"
+BASE="http://127.0.0.1:$PORT"
+
+if ! curl -fs -m 3 "$BASE/health/liveliness" >/dev/null 2>&1; then
+  if [ "$START" = 1 ]; then
+    make -s -C "$DEVTEAM_HOME" gateway >&2
+  elif [ "$DRY" = 0 ]; then
+    echo "claude-custom: the gateway is not running on :$PORT. Start it: make -C \"$DEVTEAM_HOME\" gateway  (or: claude-custom --start)" >&2
+    exit 1
+  fi
+fi
+
+mkdir -p "$DEVTEAM_HOME/.loop"
+OUT="$DEVTEAM_HOME/.loop/standalone-settings.json"
+# banner (stderr) + session settings; fails here, before Claude starts, on an unknown profile
+python3 - "$DEVTEAM_HOME" "$BASE" "$KEY" "$OUT" "$DRY" "$PROFILE_NAME" <<'PY'
+import json, os, sys
+home, base, key, out, dry, name = sys.argv[1:7]
+sys.path[:0] = [os.path.join(home, "gateway")]
+from hooks import load_profile, ProfileError
+from tiers import load_tiers
+try:
+    roles, tiers = load_profile(name), load_tiers()
+except (ProfileError, ValueError) as e:
+    sys.exit(f"claude-custom: {e}")
+s = json.load(open(os.path.join(home, "standalone", "settings.json")))
+s["env"].update({"ANTHROPIC_BASE_URL": base, "ANTHROPIC_AUTH_TOKEN": key,
+                 "ANTHROPIC_CUSTOM_HEADERS": f"x-devteam-profile: {name}"})
+json.dump(s, open(out, "w"), indent=2)
+rows = [("/model sonnet (default)", "lead"), ("/model opus", "lead-plan"), ("helpers, background", "background"), ("subagents", "default")]
+print(f"claude-custom · profile {name} · gateway {base}", file=sys.stderr)
+for label, role in rows:
+    t = roles.get(role)
+    if t:
+        print(f"  {label:24} -> {t:12} {tiers[t]['model']:50} [{tiers[t]['data'] or 'n/a'}]", file=sys.stderr)
+print("  your prompts and code go to the endpoints above; plain `claude` is unaffected", file=sys.stderr)
+if dry == "1":
+    print(out)
+    print(json.dumps(s, indent=2))
+PY
+[ "$DRY" = 1 ] && exit 0
+
+# Only the gateway connection may reach Claude Code: drop any Anthropic credentials or endpoints
+# from the shell, so a real key is never sent to the local gateway and nothing routes elsewhere.
+CLEAN=(env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_BASE_URL -u ANTHROPIC_MODEL
+       -u ANTHROPIC_DEFAULT_OPUS_MODEL -u ANTHROPIC_DEFAULT_SONNET_MODEL -u ANTHROPIC_DEFAULT_HAIKU_MODEL
+       -u ANTHROPIC_CUSTOM_HEADERS -u CLAUDE_CODE_USE_BEDROCK -u CLAUDE_CODE_USE_VERTEX)
+
+if [ "$SELFCHECK" = 1 ]; then
+  T="$(mktemp -d)"
+  echo "selfcheck: fresh Claude config at $T (no Anthropic login), one request through the gateway..." >&2
+  set +e
+  R="$(cd "$T" && CLAUDE_CONFIG_DIR="$T/.claude" "${CLEAN[@]}" claude -p "Reply with exactly the word OK and nothing else." \
+        --settings "$OUT" --model sonnet < /dev/null 2>"$T/stderr")"
+  rc=$?
+  set -e
+  if [ $rc -eq 0 ] && printf '%s' "$R" | grep -qi "ok"; then
+    echo "PASS Claude Code answered through the gateway with no Anthropic account: $R"; exit 0
+  fi
+  echo "FAIL (exit $rc): ${R:-no output}"; grep -v unrecognized "$T/stderr" | tail -5; exit 1
+fi
+
+exec "${CLEAN[@]}" claude --settings "$OUT" "$@"

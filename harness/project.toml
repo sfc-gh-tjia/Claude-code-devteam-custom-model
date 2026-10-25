@@ -35,12 +35,15 @@ name = "python"
 cmd = "python3 --version"
 timeout = 30
 
-# Every agent's inference goes through the local gateway: a dead gateway would fail every agent, so
-# doctor stops the run before any is spent. Start it with `make gateway`.
+# Every agent's inference goes through the shared gateway: a dead or wrong one would fail every agent,
+# so doctor stops the run before any is spent. The check proves it is a DevTeam gateway (not just
+# something on port 4000), that this project's token is accepted, that this project's profile
+# (x-devteam-profile in .claude/settings.json) is available, and sends one tiny request on the
+# runner's tier. Start the gateway with `make gateway`.
 [[doctor]]
 name = "gateway"
-cmd = "curl -fs -m 5 http://127.0.0.1:4000/health/liveliness"
-timeout = 15
+cmd = "python3 harness/gateway_check.py"
+timeout = 150
 # [[doctor]]
 # name = "port-free"
 # cmd = "! lsof -iTCP:8000 -sTCP:LISTEN"

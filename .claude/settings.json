@@ -10,7 +10,8 @@
     "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME": "Background (role background; baseline: NVIDIA free)",
     "CLAUDE_CODE_SUBAGENT_MODEL": "role-default",
     "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "200000",
-    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "ANTHROPIC_CUSTOM_HEADERS": "x-devteam-profile: baseline"
   },
   "permissions": {
     "allow": [

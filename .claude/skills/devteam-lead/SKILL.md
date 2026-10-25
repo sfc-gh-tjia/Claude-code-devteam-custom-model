@@ -56,6 +56,8 @@ Measured across three earlier builds, the lead's own context was 41–97% of tot
 
 ## 5. Model policy (set by the gateway's profile, not by the agents)
 
+This project's profile is the `x-devteam-profile` header in `.claude/settings.json`; the gateway is shared with other projects and `claude-custom` sessions, each on its own profile. `make routes` shows what the gateway served per profile (fallbacks, failures, cost).
+
 Every agent names its **role route** (`model: role-<agent>`). The active profile, `gateway/profiles/<PROFILE>.toml`, maps each role to a **tier**, and `gateway/tiers.toml` defines each tier (model, endpoint, key, limits). `make profile` shows the map. Switching profile (baseline, glm-free, flash-first) is a benchmark decision: tell the human, then restart the gateway.
 
 Baseline:

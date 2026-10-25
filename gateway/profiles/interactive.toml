@@ -1,0 +1,9 @@
+description = "Standalone Claude Code (claude-custom): Flash to drive, Pro on /model opus, a capable free model for Claude Code's own helpers"
+extends = "baseline"
+
+[roles]
+# Claude Code's built-in helpers (the Explore agent, web-page summaries, titles) use the haiku slot,
+# i.e. role-background. In DevTeam that is a mechanical relay, so baseline gives it the smallest free
+# model; open-ended exploration needs more. Kimi K2.6 is a provisional pick: compare it with GLM
+# (nv-glm-flash, nv-smart-alt) on your own exploration tasks before settling.
+background = "nv-smart"

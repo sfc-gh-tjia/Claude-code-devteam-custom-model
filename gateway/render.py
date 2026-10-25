@@ -50,14 +50,21 @@ def main() -> int:
     a = ap.parse_args()
     try:
         tiers = load_tiers()
-        from hooks import active_profile  # validates the profile against these tiers
+        # validate the default profile and every profile a client may select, against these tiers
+        from hooks import active_profile, allowed_profiles, load_profile
         name, roles = active_profile()
+        allowed = allowed_profiles()
+        if name not in allowed:
+            raise ValueError(f"PROFILE {name!r} is not in ALLOWED_PROFILES {allowed}")
+        for n in allowed:
+            load_profile(n)
     except (TierError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
     out = Path(a.out)
     out.write_text(json.dumps(render(tiers), indent=2) + "\n")
-    print(f"rendered {len(tiers)} tiers, profile {name} ({len(roles)} roles) -> {out.name}")
+    print(f"rendered {len(tiers)} tiers, default profile {name} ({len(roles)} roles), "
+          f"selectable: {', '.join(allowed)} -> {out.name}")
     return 0
 
 

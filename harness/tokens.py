@@ -42,6 +42,8 @@ def load_gateway(project: Path) -> None:
     """Prices, ids and comparisons from gateway/tiers.toml, and the active profile's role map.
     Without a gateway (a plain v1 repo) only the Claude prices apply."""
     gw = project / "gateway"
+    if not (gw / "tiers.py").exists() and (project / ".devteam-home").exists():   # shared gateway
+        gw = Path((project / ".devteam-home").read_text().strip()) / "gateway"
     if not (gw / "tiers.py").exists():
         return
     sys.path[:0] = [str(gw)]

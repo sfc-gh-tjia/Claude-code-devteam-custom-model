@@ -21,8 +21,10 @@ Token policy (the point of this file):
 from __future__ import annotations
 
 import copy
+import json
 import os
 import sys
+import time
 import tomllib
 from pathlib import Path
 
@@ -41,7 +43,9 @@ def build_routes(tiers: dict) -> dict:
             for n, t in tiers.items()}
 
 
-ROUTES = build_routes(load_tiers())
+_TIERS = load_tiers()
+ROUTES = build_routes(_TIERS)
+TIER_OF_MODEL = {t["model"]: n for n, t in _TIERS.items()}   # first tier wins if two share a model
 DEFAULT_ROUTE = "ds-flash" if "ds-flash" in ROUTES else next(iter(ROUTES))  # stray non-role ids (no profile)
 
 
@@ -69,6 +73,45 @@ def load_profile(name: str, _seen: tuple = ()) -> dict:
 def active_profile() -> tuple[str, dict]:
     name = os.environ.get("PROFILE") or "baseline"
     return name, load_profile(name)
+
+
+# Per-session profiles: a client names its profile in this request header (Claude Code sends it via
+# ANTHROPIC_CUSTOM_HEADERS), so one gateway serves sessions with different profiles at once. Without
+# the header, the gateway's PROFILE applies. The header only selects among profiles this gateway
+# allows (ALLOWED_PROFILES, comma-separated; default: every file in profiles/). It is a routing choice
+# on a localhost gateway, not an authorization mechanism: a shared deployment should bind allowed
+# profiles to per-user API keys instead.
+PROFILE_HEADER = "x-devteam-profile"
+
+
+def allowed_profiles() -> list:
+    names = [n.strip() for n in (os.environ.get("ALLOWED_PROFILES") or "").split(",") if n.strip()]
+    return names or sorted(p.stem for p in profiles_dir().glob("*.toml"))
+
+
+def profile_for(headers: dict | None, default: str, allowed) -> str:
+    """The profile one request asked for (case-insensitive header), or the default. Fails closed."""
+    h = {str(k).lower(): v for k, v in (headers or {}).items()}
+    name = (h.get(PROFILE_HEADER) or "").strip() or default
+    if name not in allowed:
+        raise ProfileError(f"profile {name!r} is not allowed on this gateway (allowed: {', '.join(allowed)})")
+    return name
+
+
+def route_log_path() -> Path:
+    return Path(os.environ.get("GATEWAY_ROUTE_LOG") or Path(__file__).resolve().parent.parent / ".loop" / "gateway-routes.jsonl")
+
+
+def log_route(rec: dict) -> None:
+    """Append one JSON line; logging never breaks a request."""
+    try:
+        p = route_log_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        rec = {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), **rec}
+        with p.open("a") as f:
+            f.write(json.dumps(rec, default=str) + "\n")
+    except OSError:
+        pass
 
 
 def resolve(model: str | None, roles: dict) -> str:
@@ -150,17 +193,58 @@ try:  # the LiteLLM wrapper; absent when the pure function is imported by the te
     class Normalize(CustomLogger):
         def __init__(self):
             super().__init__()
-            self.profile, self.roles = active_profile()   # a bad profile stops the gateway at start
+            self.profile, _ = active_profile()
+            self.allowed = allowed_profiles()
+            if self.profile not in self.allowed:
+                raise ProfileError(f"PROFILE {self.profile!r} is not in ALLOWED_PROFILES {self.allowed}")
+            # every allowed profile is loaded and validated now: a broken one stops the gateway at start,
+            # and requests only read this map (no shared state changes per request)
+            self.profiles = {n: load_profile(n) for n in self.allowed}
+            self.inflight: dict = {}   # litellm_call_id -> route, until its success/failure callback
 
         async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
             if isinstance(data, dict) and "messages" in data:
-                new = normalize_request({k: data[k] for k in OWNED if k in data}, self.roles)
+                headers = (data.get("proxy_server_request") or {}).get("headers") or {}
+                prof = profile_for(headers, self.profile, self.allowed)
+                requested = data.get("model")
+                new = normalize_request({k: data[k] for k in OWNED if k in data}, self.profiles[prof])
                 for k in OWNED:
                     if k in new:
                         data[k] = new[k]
                     else:
                         data.pop(k, None)
+                route = {"profile": prof, "requested": requested, "tier": data.get("model")}
+                cid = data.get("litellm_call_id")
+                if cid:   # joined back by the success/failure callbacks (same litellm_call_id)
+                    if len(self.inflight) > 10_000:
+                        self.inflight.clear()
+                    self.inflight[cid] = route
+                log_route({"event": "route", "id": cid, **route})
             return data
+
+        def _served(self, kwargs, response_obj, start_time, end_time, ok: bool) -> dict:
+            slo = kwargs.get("standard_logging_object") or {}
+            cid = kwargs.get("litellm_call_id")
+            # a failed attempt may still be rescued by a fallback under the same call id: keep the route
+            route = (self.inflight.pop(cid, None) if ok else self.inflight.get(cid)) or {}
+            model = slo.get("model") or kwargs.get("model")
+            # after a fallback LiteLLM still reports the original model_group; the model that answered
+            # identifies the tier that really served the request
+            served_tier = TIER_OF_MODEL.get(str(model)) or slo.get("model_group")
+            rec = {"event": "served" if ok else "failed", "id": cid, **route,
+                   "served_tier": served_tier, "served_model": model,
+                   "input_tokens": slo.get("prompt_tokens"), "output_tokens": slo.get("completion_tokens"),
+                   "seconds": round((end_time - start_time).total_seconds(), 2) if start_time and end_time else None}
+            rec["fallback"] = bool(route.get("tier") and served_tier and served_tier != route["tier"])
+            if not ok:
+                rec["error"] = str(kwargs.get("exception") or slo.get("error_str") or "")[:300]
+            return rec
+
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            log_route(self._served(kwargs, response_obj, start_time, end_time, True))
+
+        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            log_route(self._served(kwargs, response_obj, start_time, end_time, False))
 
     normalize = Normalize()
 except ImportError:  # pragma: no cover
