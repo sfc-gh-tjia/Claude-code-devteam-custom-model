@@ -1,0 +1,33 @@
+# Profile: which tier serves each role. Agents name a ROLE route (model: role-reviewer); the gateway
+# hook resolves it here to a TIER route (ds-pro, ds-flash, nv-*) defined in gateway/tiers.toml.
+# Pick the active profile with PROFILE=<name> in gateway/.env; `make profile` prints the resolved map.
+# An unknown role is an error (fail closed), never a silent default.
+
+description = "v2 default: DeepSeek Pro judges, Flash executes, free NVIDIA models assist"
+
+[roles]
+# Claude Code itself (settings.json env): /model sonnet, /model opus, background calls, untyped subagents
+lead            = "ds-flash"
+lead-plan       = "ds-pro"
+background      = "nv-fast"
+default         = "ds-flash"
+# judgement
+spec-author     = "ds-pro"
+tech-lead       = "ds-pro"
+qa-designer     = "ds-pro"
+reviewer        = "ds-pro"
+security-prober = "ds-pro"
+phase-reviewer  = "ds-pro"
+# execution
+implementer     = "ds-flash"
+qa-functional   = "ds-flash"
+# support (free)
+cross-reviewer  = "nv-smart"
+triage          = "nv-smart"
+explorer        = "nv-smart"
+ui-reviewer     = "nv-vision"
+runner          = "nv-fast"
+# workflow escalations: the last implementer attempt or fix round, and the one retry of a support
+# role whose output was unusable (no result, or unparsable)
+escalate        = "ds-pro"
+rescue          = "ds-flash"

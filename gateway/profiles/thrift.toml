@@ -1,0 +1,9 @@
+description = "Lowest spend: execution on NVIDIA's free copy of DeepSeek V4.1 Flash; only judgement is paid. Slower and rate limited"
+extends = "baseline"
+
+[roles]
+lead            = "nv-ds-flash"
+default         = "nv-ds-flash"
+implementer     = "nv-ds-flash"
+qa-functional   = "nv-ds-flash"
+# rescue stays on paid ds-flash: it exists for when the free tier fails

@@ -1,0 +1,7 @@
+description = "Benchmark variant: Flash also judges; Pro only on escalation. Author and reviewer are the same model, so watch post-merge defects"
+extends = "baseline"
+
+[roles]
+reviewer        = "ds-flash"
+qa-designer     = "ds-flash"
+tech-lead       = "ds-flash"

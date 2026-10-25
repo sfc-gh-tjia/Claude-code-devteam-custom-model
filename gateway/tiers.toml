@@ -1,0 +1,173 @@
+# Model tiers: THE file to edit to add, swap or remove a model.
+#
+# A tier is one model on one endpoint. Profiles (gateway/profiles/*.toml) assign tiers to roles, and
+# agents only ever name roles. So plugging in a model is: add a [tiers.<name>] block here, point a
+# role at it in a profile, put its key in gateway/.env, then `make gateway && make probe`.
+#
+# Fields
+#   model        LiteLLM model string "<provider>/<model id>". Any LiteLLM provider works; the ones
+#                tested here are deepseek/, nvidia_nim/ and openai/ (= any OpenAI-compatible API:
+#                vLLM, Ollama, LM Studio, Together, Fireworks, OpenRouter, Groq, your own server ...).
+#   api_base     endpoint URL. "${VAR:-default}" reads VAR from the environment / gateway/.env.
+#   api_key_env  name of the env var (in gateway/.env) holding the key. "" for keyless local servers.
+#   thinking     how this model's reasoning is switched: "deepseek" ({"thinking": {"type": enabled|
+#                disabled}}) or "none" (never sent; the model's default applies).
+#   think_at     lowest agent effort that turns thinking on: low | medium | high | xhigh | max | never.
+#   vision       true if it accepts images; otherwise images are replaced by a short note.
+#   max_output   output-token cap the gateway enforces.
+#   rpm          requests/minute limit the router respects (0 = none). Free tiers need this.
+#   timeout      seconds per request.
+#   fallbacks    tiers tried in order on rate limits / errors. Never fall back from a paid judgement
+#                tier to a weaker free one silently.
+#   price        [input, output, cache_read] USD per million tokens, for `make tokens` (0s if free).
+#   compare_to   v1 Claude tier this replaces (opus | sonnet | haiku), for the savings estimate.
+#   data         data-handling note shown by `make profile` (where your code goes).
+#   extra_body   optional table sent verbatim on every request (model-specific switches).
+
+[probe]
+identity = ["ds-pro", "ds-flash"]   # `make probe-identity`: is the first really a different model?
+
+# ------------------------------------------------------------------ DeepSeek (paid, prefix-cached)
+[tiers.ds-pro]
+model = "deepseek/deepseek-v4-pro"
+api_base = "${DEEPSEEK_API_BASE:-https://api.deepseek.com}"
+api_key_env = "DEEPSEEK_API_KEY"
+thinking = "deepseek"
+think_at = "medium"
+vision = false
+max_output = 65536
+timeout = 600
+fallbacks = ["ds-flash"]
+price = [1.32, 3.96, 0.044]          # peak list price; off-peak UTC windows are 50% off
+compare_to = "opus"
+data = "DeepSeek API (operated from China)"
+
+[tiers.ds-flash]
+model = "deepseek/deepseek-flash"    # V4.1 Flash, 2026-10-17 snapshot
+api_base = "${DEEPSEEK_API_BASE:-https://api.deepseek.com}"
+api_key_env = "DEEPSEEK_API_KEY"
+thinking = "deepseek"
+think_at = "high"
+vision = true
+max_output = 65536
+timeout = 600
+fallbacks = []
+price = [0.30, 1.20, 0.006]
+compare_to = "sonnet"
+data = "DeepSeek API (operated from China)"
+
+# ------------------------------------------------------------------ NVIDIA build.nvidia.com (free tier)
+# Free developer endpoints: rate limited per key (~40 req/min), prototype terms. Free tiers fall back
+# to ds-flash, so a rate limit costs a little money instead of blocking a run.
+[tiers.nv-fast]
+model = "nvidia_nim/nvidia/nemotron-3.5-lightning-30b-a3b"
+api_base = "${NVIDIA_API_BASE:-https://integrate.api.nvidia.com/v1}"
+api_key_env = "NVIDIA_API_KEY"
+thinking = "none"
+think_at = "never"
+vision = false
+max_output = 8192
+rpm = 35
+timeout = 180
+fallbacks = ["ds-flash"]
+price = [0, 0, 0]
+compare_to = "haiku"
+data = "NVIDIA free API (trial terms)"
+
+[tiers.nv-smart]
+model = "nvidia_nim/moonshotai/kimi-k2.6"
+api_base = "${NVIDIA_API_BASE:-https://integrate.api.nvidia.com/v1}"
+api_key_env = "NVIDIA_API_KEY"
+thinking = "none"
+think_at = "never"
+vision = false
+max_output = 16384
+rpm = 35
+timeout = 300
+fallbacks = ["nv-smart-alt", "ds-flash"]
+price = [0, 0, 0]
+compare_to = "haiku"
+data = "NVIDIA free API (trial terms)"
+
+[tiers.nv-smart-alt]
+model = "nvidia_nim/z-ai/glm-5.3"
+api_base = "${NVIDIA_API_BASE:-https://integrate.api.nvidia.com/v1}"
+api_key_env = "NVIDIA_API_KEY"
+thinking = "none"
+think_at = "never"
+vision = false
+max_output = 16384
+rpm = 35
+timeout = 300
+fallbacks = ["ds-flash"]
+price = [0, 0, 0]
+compare_to = "haiku"
+data = "NVIDIA free API (trial terms)"
+
+[tiers.nv-glm-flash]
+model = "nvidia_nim/z-ai/glm-5.3-flash"
+api_base = "${NVIDIA_API_BASE:-https://integrate.api.nvidia.com/v1}"
+api_key_env = "NVIDIA_API_KEY"
+thinking = "none"
+think_at = "never"
+vision = true                        # multimodal per NVIDIA's listing; `make probe` confirms
+max_output = 16384
+rpm = 35
+timeout = 300
+fallbacks = ["ds-flash"]
+price = [0, 0, 0]
+compare_to = "haiku"
+data = "NVIDIA free API (trial terms)"
+
+[tiers.nv-vision]
+model = "nvidia_nim/nvidia/nemotron-3.5-super-vl-120b-a12b"
+api_base = "${NVIDIA_API_BASE:-https://integrate.api.nvidia.com/v1}"
+api_key_env = "NVIDIA_API_KEY"
+thinking = "none"
+think_at = "never"
+vision = true
+max_output = 16384
+rpm = 35
+timeout = 300
+fallbacks = ["ds-flash"]              # V4.1 Flash accepts images
+price = [0, 0, 0]
+compare_to = "haiku"
+data = "NVIDIA free API (trial terms)"
+
+[tiers.nv-ds-flash]                  # NVIDIA's free copy of DeepSeek V4.1 Flash (profile: thrift)
+model = "nvidia_nim/deepseek-ai/deepseek-v4.1-flash"
+api_base = "${NVIDIA_API_BASE:-https://integrate.api.nvidia.com/v1}"
+api_key_env = "NVIDIA_API_KEY"
+thinking = "none"
+think_at = "never"
+vision = false
+max_output = 16384
+rpm = 35
+timeout = 600
+fallbacks = ["ds-flash"]
+price = [0, 0, 0]
+compare_to = "sonnet"
+data = "NVIDIA free API (trial terms)"
+
+# ------------------------------------------------------------------ examples: copy, uncomment, adapt
+# Any OpenAI-compatible server (local vLLM / Ollama / LM Studio, or a hosted one):
+# [tiers.local-coder]
+# model = "openai/qwen3.5-coder-32b"          # "openai/" + the id the server expects
+# api_base = "${LOCAL_API_BASE:-http://127.0.0.1:8000/v1}"
+# api_key_env = ""                             # keyless; or e.g. "TOGETHER_API_KEY"
+# thinking = "none"
+# think_at = "never"
+# vision = false
+# max_output = 16384
+# timeout = 600
+# fallbacks = ["ds-flash"]
+# price = [0, 0, 0]
+# compare_to = "sonnet"
+# data = "local machine"
+#
+# OpenRouter (one key, hundreds of models):
+# [tiers.or-model]
+# model = "openrouter/qwen/qwen3.5-coder"
+# api_base = "https://openrouter.ai/api/v1"
+# api_key_env = "OPENROUTER_API_KEY"
+# thinking = "none"   ... (same fields as above)

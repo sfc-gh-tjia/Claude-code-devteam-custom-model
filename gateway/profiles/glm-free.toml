@@ -1,0 +1,10 @@
+description = "Benchmark variant: one free GLM 5.3 Flash workhorse for support roles; full GLM 5.3 cross-reviews"
+extends = "baseline"
+
+[roles]
+triage          = "nv-glm-flash"
+explorer        = "nv-glm-flash"
+runner          = "nv-glm-flash"
+ui-reviewer     = "nv-glm-flash"    # multimodal per NVIDIA's listing; `make probe` confirms
+background      = "nv-glm-flash"
+cross-reviewer  = "nv-smart-alt"    # z-ai/glm-5.3

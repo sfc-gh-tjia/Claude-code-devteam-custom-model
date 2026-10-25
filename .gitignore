@@ -1,0 +1,9 @@
+.loop/
+.worktrees/
+__pycache__/
+*.pyc
+.pytest_cache/
+.DS_Store
+gateway/.env
+.loop/
+gateway/.litellm.*.yaml

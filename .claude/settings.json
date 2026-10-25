@@ -1,0 +1,66 @@
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:4000",
+    "ANTHROPIC_AUTH_TOKEN": "sk-devteam-local",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "role-lead-plan",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME": "Lead, planning (role lead-plan; baseline: DeepSeek V4 Pro)",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "role-lead",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME": "Lead, driving (role lead; baseline: DeepSeek V4.1 Flash)",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "role-background",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME": "Background (role background; baseline: NVIDIA free)",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "role-default",
+    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "200000",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(python3 harness/referee.py:*)",
+      "Bash(python3 harness/tokens.py:*)",
+      "Bash(make doctor)",
+      "Bash(make verify)",
+      "Bash(make status)",
+      "Bash(make tokens)",
+      "Bash(git status:*)",
+      "Bash(git log:*)",
+      "Bash(git diff:*)",
+      "Bash(git show:*)",
+      "Bash(make gateway)",
+      "Bash(make probe)",
+      "Bash(make gateway-status)",
+      "Bash(make profile)",
+      "Bash(make probe-identity)"
+    ],
+    "ask": [
+      "Edit(.claude/**)",
+      "Write(.claude/**)",
+      "Edit(harness/**)",
+      "Write(harness/**)",
+      "Bash(git push:*)",
+      "Bash(python3 harness/referee.py reset:*)",
+      "Edit(gateway/**)",
+      "Write(gateway/**)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(~/.ssh/**)",
+      "Read(~/.aws/**)",
+      "Read(~/.snowflake/**)",
+      "Read(./gateway/.env)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/harness/guard.py\" --role lead"
+          }
+        ]
+      }
+    ]
+  },
+  "model": "sonnet"
+}

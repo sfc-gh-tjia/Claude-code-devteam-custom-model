@@ -1,0 +1,90 @@
+# DevTeam project config: the ONLY harness file you edit per project.
+# Read by harness/referee.py and harness/guard.py. Commands run with /bin/bash from the repo root
+# (doctor, gates on main) or from a task worktree (setup, gates during check).
+
+[project]
+name = "my-app"
+main_branch = "main"
+worktree_dir = ".worktrees"            # must be OUTSIDE protected paths (agents write here)
+# Runs one task's own acceptance tests; {tests} = the task's test files, shell-quoted.
+test_cmd = "python3 -m pytest -q {tests}"
+# Exit codes that count as RED for the check at freeze. pytest: 1 = tests failed, 2 = collection
+# error (e.g. ModuleNotFoundError for a module that does not exist yet). 0 = already passing and
+# 4/5 = usage error / no tests collected block the freeze.
+red_exit_codes = [1, 2]
+# Generated junk the scope check ignores (also keep it in .gitignore).
+scope_ignore = ["**/__pycache__/**", "*.pyc", ".pytest_cache/**", "**/.DS_Store"]
+
+[budgets]
+max_parallel = 3                # tasks built at once (keep 2-5; the NVIDIA free tier is ~40 req/min per key)
+attempts = 3                    # implementer attempts per task; the last one escalates to ds-pro
+review_rounds = 2               # fix rounds after review; then the task blocks (write an ADR)
+run_output_tokens = 3_000_000   # output-token cap per workflow run (0 = no cap); ~$12 of ds-pro output at peak
+bash_wait_s = 540               # a referee call waits this long, then the workflow polls (`wait`)
+integrate_lock_wait_s = 1800
+
+# Run in every new task worktree (and in integrate's scratch merge unless scratch = false).
+# Anything they create must be gitignored, or the scope check will flag it.
+[[setup]]
+cmd = "true"                    # e.g. "uv sync --frozen", "npm ci --prefer-offline"
+timeout = 600
+
+# Preflight: run by `referee doctor` before any agent is spent. Fast, environmental checks only.
+[[doctor]]
+name = "python"
+cmd = "python3 --version"
+timeout = 30
+
+# Every agent's inference goes through the local gateway: a dead gateway would fail every agent, so
+# doctor stops the run before any is spent. Start it with `make gateway`.
+[[doctor]]
+name = "gateway"
+cmd = "curl -fs -m 5 http://127.0.0.1:4000/health/liveliness"
+timeout = 15
+# [[doctor]]
+# name = "port-free"
+# cmd = "! lsof -iTCP:8000 -sTCP:LISTEN"
+# [[doctor]]
+# name = "credentials"
+# cmd = "test -n \"$DATABASE_URL\""
+
+# Gates run cheapest first and stop at the first red one. Every gate has a timeout.
+# lanes: which task lanes run it at `check` ("*" = all). check/integrate/phase = false skips a stage.
+# smoke = true also runs it on main right after the fast-forward (red -> automatic revert).
+[[gates]]
+id = "lint"
+cmd = "true"                    # e.g. "uv run ruff check ."
+timeout = 120
+lanes = ["*"]
+
+[[gates]]
+id = "unit"
+cmd = "python3 -m pytest -q"
+timeout = 900
+lanes = ["*"]
+smoke = true
+
+# [[gates]]
+# id = "e2e"
+# cmd = "make e2e"              # browsers often cannot start inside the sandbox: run a daemon outside it
+# timeout = 1500
+# lanes = ["ui"]
+
+# [[gates]]
+# id = "live-smoke"
+# cmd = "make live-smoke"       # real services/data; give it its own short timeout
+# timeout = 600
+# lanes = ["risk"]
+
+# Lanes decide how much process a task gets (first match wins: risk > ui > light > default).
+#   light   = every file matches  -> no QA design, no QA functional (docs, copy, styles)
+#   ui      = any file matches    -> + ui-reviewer (screenshots against the spec)
+#   risk    = any file matches    -> + security-prober (auth, SQL, money, data deletion)
+[lanes]
+risk = ["src/**/auth/**", "**/*.sql", "src/**/payments/**"]
+ui = ["web/**", "frontend/**", "src/**/ui/**"]
+light = ["docs/**", "*.md", "**/*.css"]
+
+[protected]
+# Agents can never write these (the guard enforces it; check flags a diff that touches them).
+paths = [".claude/**", "harness/**", "gateway/**", ".git/**", ".loop/state/**", ".loop/jobs/**"]
